@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR Attendance System</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  background: #111;
+  color: white;
+  text-align: center;
+  padding: 20px;
+}
+button {
+  padding: 10px 20px;
+  margin: 10px;
+  border: none;
+  background: #00e5a0;
+  cursor: pointer;
+  font-weight: bold;
+}
+select {
+  padding: 8px;
+}
+video {
+  width: 300px;
+  margin-top: 20px;
+  border: 2px solid #00e5a0;
+}
+table {
+  width: 100%;
+  margin-top: 30px;
+  border-collapse: collapse;
+}
+td, th {
+  border: 1px solid #444;
+  padding: 8px;
+}
+</style>
+</head>
+
+<body>
+
+<h2>QR Attendance System</h2>
+
+<select id="sessionSelect">
+  <option value="">Select Session</option>
+  <option value="Morning_1">Morning Session</option>
+  <option value="Evening_1">Evening Session</option>
+</select>
+
+<br>
+
+<button onclick="toggleScanner()">Start / Stop Scanner</button>
+
+<br>
+<video id="video" playsinline></video>
+<canvas id="canvas" style="display:none;"></canvas>
+
+<h3 id="lastScan">Last Scan: -</h3>
+
+<h3>Attendance Records</h3>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>ID</th>
+<th>Session</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody id="recordsTable"></tbody>
+</table>
+
+<script>
+
+const SCRIPT_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
+
+let scanning = false;
+let stream = null;
+let cooldown = false;
+
+async function fetchStudent(id) {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?id=${id}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function sendAttendance(record) {
+  await fetch(SCRIPT_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(record)
+  });
+}
+
+async function markAttendance(studentId) {
+
+  const session = document.getElementById("sessionSelect").value;
+  if (!session) {
+    alert("Select session first");
+    return;
+  }
+
+  const student = await fetchStudent(studentId);
+
+  if (!student || !student.name) {
+    alert("Student not found in Sheet");
+    return;
+  }
+
+  const time = new Date().toLocaleString();
+
+  const record = {
+    studentId,
+    studentName: student.name,
+    session,
+    time
+  };
+
+  await sendAttendance(record);
+
+  document.getElementById("lastScan").innerText =
+    "Last Scan: " + student.name;
+
+  const row = `
+    <tr>
+      <td>${student.name}</td>
+      <td>${studentId}</td>
+      <td>${session}</td>
+      <td>${time}</td>
+    </tr>
+  `;
+
+  document.getElementById("recordsTable").innerHTML += row;
+}
+
+async function toggleScanner() {
+
+  if (scanning) {
+    stream.getTracks().forEach(t => t.stop());
+    scanning = false;
+    return;
+  }
+
+  const session = document.getElementById("sessionSelect").value;
+  if (!session) {
+    alert("Select session first");
+    return;
+  }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" }
+    });
+
+    const video = document.getElementById("video");
+    video.srcObject = stream;
+    video.play();
+
+    scanning = true;
+    requestAnimationFrame(scanFrame);
+
+  } catch {
+    alert("Camera permission denied");
+  }
+}
+
+function scanFrame() {
+
+  if (!scanning) return;
+
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.drawImage(video, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+  if (code && !cooldown) {
+    cooldown = true;
+    setTimeout(() => cooldown = false, 2000);
+    markAttendance(code.data.trim());
+  }
+
+  requestAnimationFrame(scanFrame);
+}
+
+</script>
+
+</body>
+</html>
